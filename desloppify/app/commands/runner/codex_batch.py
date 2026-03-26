@@ -100,19 +100,19 @@ def codex_batch_command(*, prompt: str, repo_root: Path, output_file: Path) -> l
         sidecar = output_file.with_suffix(".prompt.txt")
         sidecar.write_text(prompt, encoding="utf-8")
         prompt_arg = "-"  # read from stdin
-        sandbox = "danger-full-access"
     else:
         prompt_arg = prompt
-        sandbox = "workspace-write"
 
-    # On Windows with .CMD shims, cmd /c re-parses quotes and breaks TOML
-    # values like approval_policy="never".  Use unquoted form which codex
-    # parses as a bare TOML string.
     if sys.platform == "win32":
+        # --dangerously-bypass-approvals-and-sandbox completely disables
+        # the Windows sandbox (avoids CreateProcessWithLogonW errors).
+        # Unquoted TOML values avoid cmd /c quote mangling.
+        sandbox_flags: list[str] = ["--dangerously-bypass-approvals-and-sandbox"]
         approval = "approval_policy=never"
         reasoning = f"model_reasoning_effort={effort}"
-        ephemeral_flag: list[str] = []  # skip --ephemeral on Windows
+        ephemeral_flag: list[str] = []
     else:
+        sandbox_flags = ["-s", "workspace-write"]
         approval = 'approval_policy="never"'
         reasoning = f'model_reasoning_effort="{effort}"'
         ephemeral_flag = ["--ephemeral"]
@@ -121,10 +121,9 @@ def codex_batch_command(*, prompt: str, repo_root: Path, output_file: Path) -> l
         *prefix,
         "exec",
         *ephemeral_flag,
+        *sandbox_flags,
         "-C",
         str(repo_root),
-        "-s",
-        sandbox,
         "-c",
         approval,
         "-c",

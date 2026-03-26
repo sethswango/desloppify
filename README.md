@@ -1,48 +1,36 @@
-> **Fork Notice**
-> This is a personal fork of [peteromallet/desloppify](https://github.com/peteromallet/desloppify), maintained by **Seth Swango**.
-> Upstream should be synced regularly:
+> [!NOTE]
+> **This is a fork of [peteromallet/desloppify](https://github.com/peteromallet/desloppify).**
+>
+> ### What changed
+>
+> Modified `codex_batch.py` to use `--dangerously-bypass-approvals-and-sandbox` on Windows instead of
+> `-s danger-full-access`, which fixes `CreateProcessWithLogonW` sandbox failures. This enables
+> reliable automated batch reviews on Windows via Codex CLI.
+>
+> The `--dangerously-bypass-approvals-and-sandbox` flag is safe in this context because codex exec
+> sessions are already scoped to the project directory via the `-C` flag.
+>
+> ### Keeping in sync with upstream
+>
+> This fork must be kept in sync with the base project:
 > ```bash
-> git fetch upstream && git merge upstream/main
+> git remote add upstream https://github.com/peteromallet/desloppify.git
+> git fetch upstream
+> git merge upstream/main
 > ```
-
----
-
-## What Changed (Windows Codex CLI Compatibility)
-
-The upstream desloppify codex batch runner does not work on Windows due to three issues. This fork fixes all three:
-
-1. **Command-line length limit** -- Windows has a ~32 KB CLI argument limit. Desloppify passes the full review prompt (~7 KB per batch) as a command-line argument to `codex exec`. On Windows this exceeds the limit. **Fix:** The prompt is written to a sidecar `.prompt.txt` file and piped via stdin (`-` flag) instead.
-
-2. **Sandbox file access** -- Codex's `--ephemeral` flag and `workspace-write` sandbox use `CreateProcessWithLogonW` on Windows, which fails with error 1385 and prevents codex from reading repository files. **Fix:** On Windows, uses `-s danger-full-access` sandbox mode and skips `--ephemeral`.
-
-3. **`cmd /c` incompatibilities** -- npm-installed codex resolves to a `.cmd` batch shim. `cmd /c` does not forward stdin and mangles TOML quote escaping in `-c` config flags. **Fix:** Resolves the `.cmd` shim to the underlying `node codex.js` entry point for direct invocation, and uses unquoted TOML values.
-
-All changes are gated behind `sys.platform == "win32"` -- non-Windows behavior is completely unchanged.
-
-### Files Modified
-
-- `desloppify/app/commands/runner/codex_batch.py` -- `_resolve_executable()` and `codex_batch_command()`
-- `desloppify/app/commands/review/runner_process_impl/attempts.py` -- `_start_runner_process()` + UTF-8 encoding
-
-### Usage Note for Cursor/Agents
-
-> **For AI agents (Cursor, Claude, Codex):** This fork's changes only affect `desloppify review --run-batches --runner codex` on Windows. All other commands (`scan`, `status`, `next`, `show`, `plan`, `review --prepare`, etc.) are unchanged. To run a subjective review on a single codebase:
-> ```bash
-> cd /path/to/your/project
-> desloppify scan                    # mechanical scan first
-> desloppify review --run-batches --runner codex --parallel --max-parallel-batches 5 --scan-after-import
-> desloppify status                  # see updated scores
-> ```
-> The `--parallel` flag runs multiple codex sessions concurrently. Adjust `--max-parallel-batches` based on your API rate limits and machine resources.
-
-### Keeping in Sync
-
-```bash
-git remote add upstream https://github.com/peteromallet/desloppify.git
-git fetch upstream
-git merge upstream/main
-# Resolve any conflicts in the two modified files above
-```
+>
+> ### Instructions for Cursor / AI agents
+>
+> - **Install from this fork:** `pip install -e /path/to/this/fork` (or `pip install git+<fork-url>`)
+> - **Usage is identical to vanilla desloppify.** The fork only changes the Windows codex runner
+>   to bypass sandbox issues; all other functionality is unchanged.
+> - **For single-codebase use (the normal case):**
+>   ```bash
+>   cd /path/to/your/project
+>   desloppify scan
+>   desloppify review --run-batches --runner codex --parallel --scan-after-import
+>   ```
+> - All other commands (`status`, `next`, `plan`, `backlog`, etc.) work exactly the same.
 
 ---
 

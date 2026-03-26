@@ -284,11 +284,23 @@ def _run_via_subprocess(
 ) -> _ExecutionResult:
     with _managed_live_writer(state, ctx, interval):
         try:
+            # On Windows, pipe the sidecar prompt file via stdin when
+            # the command ends with "-" (same logic as _start_runner_process).
+            stdin_data = None
+            if sys.platform == "win32" and cmd and cmd[-1] == "-":
+                for i, arg in enumerate(cmd):
+                    if arg == "-o" and i + 1 < len(cmd):
+                        sidecar = Path(cmd[i + 1]).with_suffix(".prompt.txt")
+                        if sidecar.exists():
+                            stdin_data = sidecar.read_text(encoding="utf-8")
+                        break
+
             result = deps.subprocess_run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=deps.timeout_seconds,
+                **({"input": stdin_data, "encoding": "utf-8", "errors": "replace"} if stdin_data is not None else {}),
             )
         except deps.timeout_error:
             return _ExecutionResult(code=124, stdout_text="", stderr_text="", timed_out=True)
