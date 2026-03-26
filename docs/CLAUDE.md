@@ -1,3 +1,9 @@
+---
+description: 
+globs: C:/dev/desloppify/**
+alwaysApply: false
+---
+
 ## Claude Code Overlay
 
 Use Claude subagents for subjective scoring work. **Do not use `--runner codex`** — use Claude subagents exclusively.

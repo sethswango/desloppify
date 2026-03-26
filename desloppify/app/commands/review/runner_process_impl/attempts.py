@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess  # nosec
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -104,13 +105,39 @@ def _start_runner_process(
     ctx: _AttemptContext,
 ) -> subprocess.Popen[str] | _ExecutionResult:
     try:
-        return deps.subprocess_popen(
+        # On Windows, when the prompt is piped via stdin ("-"), feed the
+        # sidecar .prompt.txt file written by codex_batch_command.
+        stdin_pipe = None
+        env = None
+        if sys.platform == "win32" and cmd and cmd[-1] == "-":
+            stdin_pipe = subprocess.PIPE
+            # Ensure codex subprocesses use UTF-8 for stdio on Windows
+            # to avoid 'charmap' codec errors with Unicode content.
+            import os as _os
+            env = {**_os.environ, "PYTHONIOENCODING": "utf-8"}
+
+        proc = deps.subprocess_popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            stdin=stdin_pipe,
             text=True,
             bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+            **({"env": env} if env is not None else {}),
         )
+
+        if stdin_pipe is not None:
+            for i, arg in enumerate(cmd):
+                if arg == "-o" and i + 1 < len(cmd):
+                    sidecar = Path(cmd[i + 1]).with_suffix(".prompt.txt")
+                    if sidecar.exists():
+                        proc.stdin.write(sidecar.read_text(encoding="utf-8"))
+                    proc.stdin.close()
+                    break
+
+        return proc
     except OSError as exc:
         return _runner_error_result(
             ctx=ctx,

@@ -34,13 +34,20 @@ def _resolve_executable(name: str) -> list[str]:
     ``cmd /c`` causes double-quoting issues when arguments contain spaces
     (cmd.exe re-parses the command with its own tokeniser, breaking prompts).
 
-    Only uses ``cmd /c`` for ``.cmd``/``.bat`` shims or when the executable
-    cannot be resolved (so cmd.exe's own PATH lookup can find it).
+    For npm-installed tools, we resolve the underlying node + JS entry point
+    directly so that stdin piping works (``cmd /c`` does not forward stdin).
     """
     resolved = shutil.which(name)
     if sys.platform == "win32":
         if resolved is not None:
             if resolved.lower().endswith((".cmd", ".bat")):
+                # Try to resolve the underlying node + JS script from the
+                # .cmd shim so we can invoke directly without cmd /c.
+                cmd_dir = Path(resolved).parent
+                js_entry = cmd_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+                if js_entry.exists():
+                    node = shutil.which("node") or "node"
+                    return [node, str(js_entry)]
                 return ["cmd", "/c", resolved]
             # .exe or extensionless — invoke directly, no cmd /c wrapper
             return [resolved]
@@ -76,26 +83,55 @@ def _wrap_cmd_c(cmd: list[str]) -> list[str]:
 
 
 def codex_batch_command(*, prompt: str, repo_root: Path, output_file: Path) -> list[str]:
-    """Build one codex exec command line for a batch prompt."""
+    """Build one codex exec command line for a batch prompt.
+
+    On Windows the prompt is written to a sidecar file and piped via stdin
+    (``-``) to avoid the ~32 KB command-line length limit.  The sandbox mode
+    is set to ``danger-full-access`` so codex can read repository files
+    without ``CreateProcessWithLogonW`` failures.
+    """
     effort = os.environ.get("DESLOPPIFY_CODEX_REASONING_EFFORT", "low").strip().lower()
     if effort not in {"low", "medium", "high", "xhigh"}:
         effort = "low"
     prefix = _resolve_executable("codex")
+
+    if sys.platform == "win32":
+        # Write prompt to sidecar so _start_runner_process can pipe it.
+        sidecar = output_file.with_suffix(".prompt.txt")
+        sidecar.write_text(prompt, encoding="utf-8")
+        prompt_arg = "-"  # read from stdin
+        sandbox = "danger-full-access"
+    else:
+        prompt_arg = prompt
+        sandbox = "workspace-write"
+
+    # On Windows with .CMD shims, cmd /c re-parses quotes and breaks TOML
+    # values like approval_policy="never".  Use unquoted form which codex
+    # parses as a bare TOML string.
+    if sys.platform == "win32":
+        approval = "approval_policy=never"
+        reasoning = f"model_reasoning_effort={effort}"
+        ephemeral_flag: list[str] = []  # skip --ephemeral on Windows
+    else:
+        approval = 'approval_policy="never"'
+        reasoning = f'model_reasoning_effort="{effort}"'
+        ephemeral_flag = ["--ephemeral"]
+
     cmd = [
         *prefix,
         "exec",
-        "--ephemeral",
+        *ephemeral_flag,
         "-C",
         str(repo_root),
         "-s",
-        "workspace-write",
+        sandbox,
         "-c",
-        'approval_policy="never"',
+        approval,
         "-c",
-        f'model_reasoning_effort="{effort}"',
+        reasoning,
         "-o",
         str(output_file),
-        prompt,
+        prompt_arg,
     ]
     return _wrap_cmd_c(cmd)
 
