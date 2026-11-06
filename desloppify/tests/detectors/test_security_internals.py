@@ -191,8 +191,9 @@ def test_detect_security_issues_skips_excluded_zone(tmp_path):
     """Files in excluded zones are not scanned."""
     f = tmp_path / "test_creds.py"
     f.write_text('aws_key = "AKIAIOSFODNN7EXAMPLE"\n')
-    zm = _make_zone_map([(str(f), Zone.TEST)])
-    entries, scanned = detect_security_issues([str(f)], zm, "python")
+    path = f.as_posix()  # a "/" keeps the full-path pattern on the substring rule
+    zm = _make_zone_map([(path, Zone.TEST)])
+    entries, scanned = detect_security_issues([path], zm, "python")
     assert scanned == 0
     assert entries == []
 

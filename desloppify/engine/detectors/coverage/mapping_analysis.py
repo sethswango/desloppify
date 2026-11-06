@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections import deque
 from collections.abc import Callable
 from typing import Any
+
+from desloppify.base.discovery.file_paths import strip_root
 
 
 def transitive_coverage(
@@ -139,7 +140,6 @@ def _build_prod_by_module(
     project_root: str,
 ) -> dict[str, str]:
     """Build module lookup map for production files."""
-    root_str = project_root + os.sep
     prod_by_module: dict[str, str] = {}
     ambiguous_aliases: set[str] = set()
 
@@ -154,11 +154,7 @@ def _build_prod_by_module(
         prod_by_module.pop(alias, None)
 
     for prod_file in production_files:
-        rel_path = (
-            prod_file[len(root_str) :]
-            if prod_file.startswith(root_str)
-            else prod_file
-        )
+        rel_path = strip_root(prod_file, project_root)
         # Strip src/ prefix so src-layout projects map correctly
         # (e.g. 'src/argos_toolkit/foo.py' -> 'argos_toolkit.foo')
         if rel_path.startswith("src/") or rel_path.startswith("src\\"):
@@ -188,8 +184,7 @@ def get_test_files_for_prod(
 ) -> list[str]:
     """Find which test files exercise a given production file."""
     parsed_imports_by_test = parsed_imports_by_test or {}
-    root_str = project_root + os.sep
-    rel_prod = prod_file[len(root_str) :] if prod_file.startswith(root_str) else prod_file
+    rel_prod = strip_root(prod_file, project_root)
     module_name = rel_prod.replace("/", ".").replace("\\", ".")
     if "." in module_name:
         module_name = module_name.rsplit(".", 1)[0]

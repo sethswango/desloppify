@@ -22,6 +22,8 @@ from desloppify.app.commands.review.runner_process_impl.types import (
     FollowupScanDeps,
 )
 
+_PROMPT_ARG_MAX_CHARS = 16_000
+
 
 def _resolve_executable(name: str) -> list[str]:
     """Resolve an executable, handling Windows .cmd/.bat wrappers.
@@ -34,20 +36,13 @@ def _resolve_executable(name: str) -> list[str]:
     ``cmd /c`` causes double-quoting issues when arguments contain spaces
     (cmd.exe re-parses the command with its own tokeniser, breaking prompts).
 
-    For npm-installed tools, we resolve the underlying node + JS entry point
-    directly so that stdin piping works (``cmd /c`` does not forward stdin).
+    Only uses ``cmd /c`` for ``.cmd``/``.bat`` shims or when the executable
+    cannot be resolved (so cmd.exe's own PATH lookup can find it).
     """
     resolved = shutil.which(name)
     if sys.platform == "win32":
         if resolved is not None:
             if resolved.lower().endswith((".cmd", ".bat")):
-                # Try to resolve the underlying node + JS script from the
-                # .cmd shim so we can invoke directly without cmd /c.
-                cmd_dir = Path(resolved).parent
-                js_entry = cmd_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
-                if js_entry.exists():
-                    node = shutil.which("node") or "node"
-                    return [node, str(js_entry)]
                 return ["cmd", "/c", resolved]
             # .exe or extensionless — invoke directly, no cmd /c wrapper
             return [resolved]
@@ -82,57 +77,46 @@ def _wrap_cmd_c(cmd: list[str]) -> list[str]:
     return cmd
 
 
-def codex_batch_command(*, prompt: str, repo_root: Path, output_file: Path) -> list[str]:
-    """Build one codex exec command line for a batch prompt.
+def _prompt_via_stdin(prompt: str) -> bool:
+    """Return True when prompt should be sent through stdin instead of argv."""
+    return sys.platform == "win32" or len(prompt) > _PROMPT_ARG_MAX_CHARS
 
-    On Windows the prompt is written to a sidecar file and piped via stdin
-    (``-``) to avoid the ~32 KB command-line length limit.  The sandbox mode
-    is set to ``danger-full-access`` so codex can read repository files
-    without ``CreateProcessWithLogonW`` failures.
-    """
+
+def codex_batch_command(*, prompt: str, repo_root: Path, output_file: Path) -> list[str]:
+    """Build one codex exec command line for a batch prompt."""
     effort = os.environ.get("DESLOPPIFY_CODEX_REASONING_EFFORT", "low").strip().lower()
     if effort not in {"low", "medium", "high", "xhigh"}:
         effort = "low"
+    sandbox = os.environ.get("DESLOPPIFY_CODEX_SANDBOX", "workspace-write").strip().lower()
+    if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
+        sandbox = "workspace-write"
     prefix = _resolve_executable("codex")
-
-    if sys.platform == "win32":
-        # Write prompt to sidecar so _start_runner_process can pipe it.
-        sidecar = output_file.with_suffix(".prompt.txt")
-        sidecar.write_text(prompt, encoding="utf-8")
-        prompt_arg = "-"  # read from stdin
-    else:
-        prompt_arg = prompt
-
-    if sys.platform == "win32":
-        # --dangerously-bypass-approvals-and-sandbox completely disables
-        # the Windows sandbox (avoids CreateProcessWithLogonW errors).
-        # Unquoted TOML values avoid cmd /c quote mangling.
-        sandbox_flags: list[str] = ["--dangerously-bypass-approvals-and-sandbox"]
-        approval = "approval_policy=never"
-        reasoning = f"model_reasoning_effort={effort}"
-        ephemeral_flag: list[str] = []
-    else:
-        sandbox_flags = ["-s", "workspace-write"]
-        approval = 'approval_policy="never"'
-        reasoning = f'model_reasoning_effort="{effort}"'
-        ephemeral_flag = ["--ephemeral"]
-
     cmd = [
         *prefix,
         "exec",
-        *ephemeral_flag,
-        *sandbox_flags,
+        "--ephemeral",
         "-C",
         str(repo_root),
+        "-s",
+        sandbox,
         "-c",
-        approval,
+        'approval_policy="never"',
         "-c",
-        reasoning,
+        f'model_reasoning_effort="{effort}"',
         "-o",
         str(output_file),
-        prompt_arg,
+        "-" if _prompt_via_stdin(prompt) else prompt,
     ]
     return _wrap_cmd_c(cmd)
+
+
+def _command_reads_prompt_from_stdin(cmd: list[str]) -> bool:
+    """Return True when the built command asks Codex to read prompt from stdin."""
+    if not cmd:
+        return False
+    if len(cmd) == 3 and cmd[0].lower() == "cmd" and cmd[1].lower() == "/c":
+        return cmd[2].endswith(" -")
+    return cmd[-1] == "-"
 
 
 def run_codex_batch(
@@ -152,6 +136,7 @@ def run_codex_batch(
         repo_root=repo_root,
         output_file=output_file,
     )
+    stdin_text = prompt if _command_reads_prompt_from_stdin(cmd) else None
     config = resolve_retry_config(deps)
     log_sections: list[str] = []
 
@@ -167,6 +152,7 @@ def run_codex_batch(
             use_popen=config.use_popen,
             live_log_interval=config.live_log_interval,
             stall_seconds=config.stall_seconds,
+            stdin_text=stdin_text,
         )
         early_return = handle_early_attempt_return(result)
         if early_return is not None:

@@ -12,6 +12,7 @@ from desloppify.base.discovery.file_paths import (
     matches_exclusion,
     rel,
     resolve_path,
+    strip_root,
 )
 from desloppify.base.discovery.source import (
     SourceDiscoveryOptions,
@@ -138,6 +139,12 @@ def test_matches_exclusion_nested_dir_doublestar():
 def test_matches_exclusion_exact_directory_path():
     """Multi-segment exclusions should match the directory itself, not only children."""
     assert matches_exclusion(".claude/worktrees", ".claude/worktrees") is True
+
+
+def test_matches_exclusion_hidden_dir_globs_preserve_leading_dot():
+    """Hidden directories should not match non-hidden glob prefixes."""
+    assert matches_exclusion(".cache/subdir/file.py", "cache/**") is False
+    assert matches_exclusion(".cache/subdir/file.py", ".cache/**") is True
 
 
 # ── find_source_files() ─────────────────────────────────────
@@ -482,3 +489,14 @@ def test_utils_text_read_code_snippet_absolute_path(tmp_path):
     )
     assert result is not None
     assert "alpha" in result
+
+
+def test_strip_root_matches_whatever_separators_each_side_uses():
+    win_root = "C:" + chr(92) + "repo"  # C:<backslash>repo
+    bs = chr(92)
+    assert strip_root(win_root + "/src/a.py", win_root) == "src/a.py"
+    assert strip_root(win_root + bs + "src" + bs + "a.py", win_root) == "src" + bs + "a.py"
+    assert strip_root("/repo/src/a.py", "/repo") == "src/a.py"
+    assert strip_root("/repo/src/a.py", "/repo/") == "src/a.py"
+    assert strip_root("/repository/a.py", "/repo") == "/repository/a.py"
+    assert strip_root("src/a.py", "/repo") == "src/a.py"

@@ -198,9 +198,12 @@ class TestDetectCouplingViolations:
                 imports={"src/tools/editor/helpers.ts"},
             ),
         }
+        # Prefixes are absolute under the resolved root ("D:/project" on Windows).
+        root = Path("/project")
+        abs_root = root.resolve().as_posix()
         with patch("desloppify.engine.detectors.coupling.rel", side_effect=lambda p: p):
             entries, total_edges = detect_coupling_violations(
-                Path("/project"), graph, SHARED_PREFIX, TOOLS_PREFIX
+                root, graph, f"{abs_root}/src/shared/", f"{abs_root}/src/tools/"
             )
         assert len(entries) == 1
         assert total_edges.eligible_edges == 1

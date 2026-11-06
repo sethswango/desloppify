@@ -21,7 +21,7 @@ def matches_exclusion(rel_path: str, exclusion: str) -> bool:
         # Full-path glob match for patterns with directory separators
         # (e.g. "Wan2GP/**" should match "Wan2GP/models/rf.py").
         if "/" in exclusion or os.sep in exclusion:
-            normalized_path = rel_path.lstrip("./")
+            normalized_path = rel_path.removeprefix("./")
             if fnmatch.fnmatch(normalized_path, exclusion):
                 return True
     if "/" in exclusion or os.sep in exclusion:
@@ -34,6 +34,21 @@ def matches_exclusion(rel_path: str, exclusion: str) -> bool:
 
 def normalize_path_separators(path: str) -> str:
     return path.replace("\\", "/")
+
+
+def strip_root(path: str, root: str | Path) -> str:
+    """Return *path* relative to *root*, whatever separators either one uses.
+
+    The relative part keeps the separators *path* already had. A path that is
+    not under *root* is returned unchanged. On Windows the root carries
+    backslashes while joined paths often carry ``/`` after it, so a plain
+    ``root + os.sep`` prefix check misses them.
+    """
+    root_norm = normalize_path_separators(str(root)).rstrip("/") + "/"
+    if normalize_path_separators(path).startswith(root_norm):
+        # Separator normalization keeps lengths, so slice the original path.
+        return path[len(root_norm) :]
+    return path
 
 
 def safe_relpath(path: str | Path, start: str | Path) -> str:

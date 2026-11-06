@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # ── Knip adapter ────────────────────────────────────────────────────────────
 from desloppify.languages.typescript.detectors.knip_adapter import detect_with_knip
@@ -528,21 +531,60 @@ class TestBanditExcludeIntegration:
 
 from desloppify.engine.detectors.jscpd_adapter import (  # noqa: E402
     _parse_jscpd_report,
+    _run_jscpd_command,
     detect_with_jscpd,
 )
 
 
 class TestJscpdAdapter:
     def test_returns_none_when_jscpd_not_installed(self, tmp_path):
-        with patch("subprocess.run", side_effect=FileNotFoundError("npx not found")):
+        with patch(
+            "desloppify.engine.detectors.jscpd_adapter._resolve_jscpd_command",
+            return_value=None,
+        ):
             assert detect_with_jscpd(tmp_path) is None
 
     def test_returns_none_on_timeout(self, tmp_path):
         with patch(
             "desloppify.engine.detectors.jscpd_adapter._resolve_jscpd_command",
             return_value=["/usr/bin/npx", "--yes", "jscpd"],
-        ), patch("subprocess.run", side_effect=subprocess.TimeoutExpired("npx", 120)):
+        ), patch(
+            "desloppify.engine.detectors.jscpd_adapter._run_jscpd_command",
+            side_effect=subprocess.TimeoutExpired("npx", 120),
+        ):
             assert detect_with_jscpd(tmp_path) is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
+    def test_timeout_kills_jscpd_process_group(self):
+        class FakeProc:
+            pid = 4321
+            returncode = None
+            calls = 0
+
+            def communicate(self, timeout=None):
+                self.calls += 1
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired(["jscpd"], timeout)
+                self.returncode = -9
+                return "", ""
+
+        fake_proc = FakeProc()
+        with patch(
+            "desloppify.engine.detectors.jscpd_adapter.subprocess.Popen",
+            return_value=fake_proc,
+        ) as popen, patch(
+            "desloppify.engine.detectors.jscpd_adapter.os.getpgid",
+            return_value=9876,
+        ), patch(
+            "desloppify.engine.detectors.jscpd_adapter.os.killpg",
+        ) as killpg:
+            with pytest.raises(subprocess.TimeoutExpired):
+                _run_jscpd_command(["jscpd"], timeout=1)
+
+        popen.assert_called_once()
+        assert popen.call_args.kwargs["start_new_session"] is True
+        killpg.assert_called_once()
+        assert killpg.call_args.args[0] == 9876
 
     def test_returns_empty_on_no_duplicates(self, tmp_path):
         result = _parse_jscpd_report({"duplicates": []}, tmp_path)
@@ -554,7 +596,9 @@ class TestJscpdAdapter:
         with patch(
             "desloppify.engine.detectors.jscpd_adapter._resolve_jscpd_command",
             return_value=["/usr/bin/npx", "--yes", "jscpd"],
-        ), patch("subprocess.run"), patch("tempfile.TemporaryDirectory") as mock_td:
+        ), patch(
+            "desloppify.engine.detectors.jscpd_adapter._run_jscpd_command",
+        ), patch("tempfile.TemporaryDirectory") as mock_td:
             mock_td.return_value.__enter__.return_value = str(tmp_path)
             mock_td.return_value.__exit__.return_value = None
             result = detect_with_jscpd(tmp_path)
@@ -708,7 +752,10 @@ class TestJscpdAdapter:
         with patch(
             "desloppify.engine.detectors.jscpd_adapter._resolve_jscpd_command",
             return_value=["/usr/bin/npx", "--yes", "jscpd"],
-        ), patch("subprocess.run", side_effect=_fake_run), patch(
+        ), patch(
+            "desloppify.engine.detectors.jscpd_adapter._run_jscpd_command",
+            side_effect=_fake_run,
+        ), patch(
             "desloppify.engine.detectors.jscpd_adapter.collect_exclude_dirs",
             return_value=fake_dirs,
         ), patch(
@@ -922,7 +969,7 @@ class TestCollectExcludeDirs:
             "desloppify.base.discovery.source.get_exclusions", return_value=()
         ):
             result = collect_exclude_dirs(tmp_path)
-        basenames = {p.rsplit("/", 1)[-1] for p in result}
+        basenames = {Path(p).name for p in result}
         assert "node_modules" in basenames
         assert "__pycache__" in basenames
         assert ".git" in basenames
@@ -943,7 +990,7 @@ class TestCollectExcludeDirs:
             return_value=("vendor", "third_party"),
         ):
             result = collect_exclude_dirs(tmp_path)
-        basenames = {p.rsplit("/", 1)[-1] for p in result}
+        basenames = {Path(p).name for p in result}
         assert "vendor" in basenames
         assert "third_party" in basenames
 
@@ -963,5 +1010,5 @@ class TestCollectExcludeDirs:
             return_value=("node_modules",),
         ):
             result = collect_exclude_dirs(tmp_path)
-        node_entries = [p for p in result if p.endswith("/node_modules")]
+        node_entries = [p for p in result if Path(p).name == "node_modules"]
         assert len(node_entries) == 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from desloppify.app.commands.helpers.rendering import (
@@ -167,7 +168,7 @@ def test_state_path_from_explicit_state_arg():
     args = SimpleNamespace(state="/custom/path.json", lang=None)
     result = state_path(args)
     assert result is not None
-    assert str(result) == "/custom/path.json"
+    assert result == Path("/custom/path.json")
 
 
 def test_state_path_from_lang_arg():
@@ -277,7 +278,10 @@ def test_recover_state_from_saved_plan_rehydrates_queue_and_step_refs():
         "review::a.py::1234",
         "concerns::b.ts::5678",
     }
-    assert recovered["issues"]["review::a.py::1234"]["summary"] == "review::a.py::1234"
+    assert (
+        recovered["issues"]["review::a.py::1234"]["summary"]
+        == "Recovered review item for a.py: 1234"
+    )
     assert recovered["issues"]["concerns::b.ts::5678"]["detector"] == "concerns"
 
 
