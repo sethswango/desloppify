@@ -75,9 +75,12 @@ def ts_build_dep_graph(
             if resolved is None:
                 continue
 
-            # Normalize to absolute path.
+            # Normalize to an absolute path with native separators; a resolver
+            # that joins "/" segments onto a Windows root would otherwise miss
+            # the file set and drop the edge.
             if not os.path.isabs(resolved):
-                resolved = os.path.normpath(os.path.join(scan_path, resolved))
+                resolved = os.path.join(scan_path, resolved)
+            resolved = os.path.normpath(resolved)
 
             # Only track edges within the scanned file set.
             if resolved not in file_set:

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
-import os
 
+from desloppify.base.discovery.file_paths import strip_root
 from desloppify.base.discovery.paths import get_project_root
 from desloppify.engine.policy.zones import FileZoneMap, Zone
 
@@ -17,12 +17,12 @@ _MAX_NO_TESTS_ENTRIES = 50
 
 def _normalize_graph_paths(graph: dict) -> dict:
     """Normalize graph paths to relative paths."""
-    root_prefix = str(get_project_root()) + os.sep
+    root = get_project_root()
 
     def _to_rel(path: str) -> str:
-        return path[len(root_prefix) :] if path.startswith(root_prefix) else path
+        return strip_root(path, root)
 
-    needs_norm = any(k.startswith(root_prefix) for k in graph)
+    needs_norm = any(_to_rel(k) != k for k in graph)
     if not needs_norm:
         return graph
 
@@ -44,10 +44,10 @@ def _discover_scorable_and_tests(
     extra_test_files: set[str] | None,
 ) -> tuple[set[str], set[str], set[str], int]:
     """Return (production_files, test_files, scorable_files, potential)."""
-    root_prefix = str(get_project_root()) + os.sep
+    root = get_project_root()
 
     def _to_rel(path: str) -> str:
-        return path[len(root_prefix) :] if path.startswith(root_prefix) else path
+        return strip_root(path, root)
 
     all_files = zone_map.all_files()
     production_files = set(zone_map.include_only(all_files, Zone.PRODUCTION, Zone.SCRIPT))

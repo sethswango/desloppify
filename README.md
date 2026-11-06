@@ -1,36 +1,33 @@
 > [!NOTE]
-> **This is a fork of [peteromallet/desloppify](https://github.com/peteromallet/desloppify).**
+> **This is a fork of [peteromallet/desloppify](https://github.com/peteromallet/desloppify)**, kept at upstream v1.0 plus Windows fixes. Usage is identical to upstream.
 >
-> ### What changed
+> ### What this fork adds
 >
-> Modified `codex_batch.py` to use `--dangerously-bypass-approvals-and-sandbox` on Windows instead of
-> `-s danger-full-access`, which fixes `CreateProcessWithLogonW` sandbox failures. This enables
-> reliable automated batch reviews on Windows via Codex CLI.
+> - **Tree-sitter works on Windows.** `tree-sitter-language-pack` 1.6.3 is excluded from the `treesitter` and `full` extras. Its Windows wheels ship only the native extension and no importable module, so every tree-sitter detector (Go, Rust, Java, Bash, Ruby and the rest) turned itself off without an error.
+> - **Import graphs keep their edges on Windows.** The tree-sitter graph builder normalizes every resolved path. Resolvers that join `/` segments onto a `C:\` root produced mixed-separator paths that missed the file set, so edges were dropped and cycle, orphan and coupling results were wrong.
+> - **Coverage mapping strips the project root whatever the separators** (`strip_root` in `base/discovery/file_paths.py`), so test-to-source mapping and module names no longer break on mixed-separator paths.
+> - **Review runners talk UTF-8 on their pipes.** Without `PYTHONUTF8` a Windows host encodes pipes with its locale codec; a prompt with non-ASCII text failed the stdin write, which the Popen path swallowed, leaving Codex waiting.
+> - **The test suite passes on Windows.** Upstream v1.0 fails 34 tests there: the bugs above, and POSIX assumptions in the tests themselves (argv shapes behind `cmd /c`, `/` paths, executable bits, process groups, the host's own codex install).
 >
-> The `--dangerously-bypass-approvals-and-sandbox` flag is safe in this context because codex exec
-> sessions are already scoped to the project directory via the `-C` flag.
+> Run the tests with `uv run --python 3.12 --extra full --with pytest --with pyyaml pytest -q`.
+>
+> ### Migration note (5 Nov 2026)
+>
+> Removed from the fork, because upstream v1.0 now covers it or it never belonged here:
+>
+> - The Codex runner rewrite: the prompt sidecar file, the `.cmd`-shim-to-node resolution and the forced `--dangerously-bypass-approvals-and-sandbox` on Windows. Upstream now pipes the prompt on stdin on Windows (and above 16k characters) and takes `DESLOPPIFY_CODEX_SANDBOX=read-only|workspace-write|danger-full-access`. If Codex on Windows still fails with `CreateProcessWithLogonW`, set `DESLOPPIFY_CODEX_SANDBOX=danger-full-access`; whether that alone is enough is unverified.
+> - A Cursor rule header in `docs/CLAUDE.md` scoped to one machine's local checkout path. It also broke the bundled-docs sync test.
+> - The README's `pip install` advice.
+>
+> Custom review criteria are not added here. Import checks review results against the built-in dimensions, so a project's own criteria live with the tool that runs the review.
 >
 > ### Keeping in sync with upstream
 >
-> This fork must be kept in sync with the base project:
 > ```bash
 > git remote add upstream https://github.com/peteromallet/desloppify.git
-> git fetch upstream
-> git merge upstream/main
+> git fetch upstream --tags
+> git merge v<next release>
 > ```
->
-> ### Instructions for Cursor / AI agents
->
-> - **Install from this fork:** `pip install -e /path/to/this/fork` (or `pip install git+<fork-url>`)
-> - **Usage is identical to vanilla desloppify.** The fork only changes the Windows codex runner
->   to bypass sandbox issues; all other functionality is unchanged.
-> - **For single-codebase use (the normal case):**
->   ```bash
->   cd /path/to/your/project
->   desloppify scan
->   desloppify review --run-batches --runner codex --parallel --scan-after-import
->   ```
-> - All other commands (`status`, `next`, `plan`, `backlog`, etc.) work exactly the same.
 
 ---
 
@@ -59,7 +56,7 @@ I want you to improve the quality of this codebase. To do this, install and run 
 Run ALL of the following (requires Python 3.11+):
 
 pip install --upgrade "desloppify[full]"
-desloppify update-skill claude    # installs the full workflow guide — pick yours: claude, cursor, codex, copilot, droid, windsurf, gemini
+desloppify update-skill claude    # installs the full workflow guide — pick yours: claude, cursor, codex, copilot, droid, windsurf, gemini, rovodev
 
 Add .desloppify/ to your .gitignore — it contains local state that shouldn't be committed.
 
@@ -88,6 +85,55 @@ is too big or too small. Fix things properly, not minimally.
 Use `plan` / `plan queue` to reorder priorities or cluster related issues. Rescan periodically.
 The scan output includes agent instructions — follow them, don't substitute your own analysis.
 ```
+
+## Monorepos and multi-project directories
+
+If your workspace contains multiple programs (e.g., a frontend and backend in sibling directories), scan each one separately with `--path`:
+
+```bash
+desloppify --lang typescript scan --path ./frontend
+desloppify --lang python scan --path ./backend
+```
+
+Scanning the parent directory that contains both will mix state and path context across unrelated codebases, producing unreliable results. Each `--path` target should be a single coherent project. Desloppify maintains separate state per language, so you can scan a TypeScript frontend and a Python backend from the same workspace without conflict — just target them individually.
+
+## CI
+
+Desloppify works best in CI as a full-codebase health gate, not as a diff-only linter. Run the CI profile against the same coherent project path you scan locally:
+
+```bash
+desloppify scan --path . --profile ci --no-badge
+desloppify status --json
+```
+
+`--profile ci` skips slow and subjective phases and bypasses the mid-cycle scan queue gate so a CI job can collect a fresh mechanical snapshot. Use `status --json` if you want a script to read the strict/objective scores and enforce your own threshold.
+
+On constrained Java CI runners, the PMD detector defaults to `--threads 0` to avoid worker-thread fanout. Set `DESLOPPIFY_PMD_THREADS` to a PMD thread value such as `2` or `0.5C` if you want more throughput.
+
+Minimal GitHub Actions example:
+
+```yaml
+name: desloppify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade "desloppify[full]"
+      - run: desloppify scan --path . --profile ci --no-badge
+      - run: desloppify status --json
+```
+
+For monorepos, run one job or matrix entry per project path instead of scanning the workspace root. True incremental or diff-only scanning is not the supported model yet; compare full-codebase results across runs or enforce a project-level threshold.
 
 ## How it works
 
@@ -134,4 +180,4 @@ If you'd like to join a community of vibe engineers who want to build beautiful 
 
 Issues, improvements, and PRs are hugely appreciated — [github.com/peteromallet/desloppify](https://github.com/peteromallet/desloppify).
 
-MIT License
+Desloppify is free for any individual — whether working independently or at a company — to use for their own work. It is also free for open source companies to use in any capacity, including commercial. Non-open source companies who wish to commercialize it should refer to the [LICENSE](LICENSE) for transparent pricing details.

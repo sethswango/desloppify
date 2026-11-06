@@ -482,6 +482,32 @@ def test_queue_snapshot_executes_review_items_promoted_into_active_cluster() -> 
     assert [item["id"] for item in snapshot.execution_items] == ["review::a"]
 
 
+def test_queue_snapshot_executes_review_items_explicitly_in_queue_order() -> None:
+    """Review items explicitly persisted in queue_order are executable.
+
+    Review import can add findings directly to queue_order before any manual
+    cluster triage has run. The execution queue must honor that durable plan
+    ordering; otherwise `desloppify next` reports "nothing to do" while status
+    and plan both show open planned review work.
+    """
+    state = {
+        "issues": {
+            "review::a": _issue("review::a", detector="review"),
+        }
+    }
+    plan = empty_plan()
+    plan["queue_order"] = ["review::a"]
+    plan["refresh_state"] = {
+        "lifecycle_phase": "plan",
+        "postflight_scan_completed_at_scan_count": 1,
+    }
+
+    snapshot = build_queue_snapshot(state, plan=plan)
+
+    assert snapshot.phase == LIFECYCLE_PHASE_EXECUTE
+    assert [item["id"] for item in snapshot.execution_items] == ["review::a"]
+
+
 def test_queue_snapshot_keeps_unpromoted_review_cluster_in_postflight() -> None:
     """Review cluster (execution_status: review) → postflight, not execute."""
     state = {
